@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────
+# Configurazione: Kolmogorov flow 2D - Strato 1 (baseline)
+# ─────────────────────────────────────────────────────
+
+results_dir: "results/baseline"
+
+physics:
+  Re: 1000          # Reynolds number (paper usa 1e6, noi iniziamo basso)
+  t_end: 1.0        # tempo finale (aumenta gradualmente: 1 -> 2 -> 5)
+  domain: [0, 1, 0, 1]   # [x_min, x_max, y_min, y_max]
+
+network:
+  input_dim: 3        # [t, x, y]
+  output_dim: 3       # [u, v, p]
+  hidden_dim: 256     # paper usa 768, noi riduciamo per Colab
+  n_layers: 4         # numero di hidden layers
+  embed_dim: 64       # dimensione Fourier embedding
+  fourier_scale: 1.0  # scala della distribuzione N(0, scale^2)
+  activation: "tanh"  # tanh | swish | gelu
+
+training:
+  n_iter: 20000       # iterazioni totali (aumenta a 50k-100k per risultati migliori)
+  n_pde: 4096         # punti di collocazione PDE per iterazione
+  n_ic: 1024          # punti condizione iniziale
+  lr: 1.0e-3          # learning rate iniziale
+  lr_decay: 0.9       # fattore di decay
+  lr_decay_steps: 2000
+  w_ic: 100.0         # peso loss IC (alto: priorita alla condizione iniziale)
+  w_pde: 1.0          # peso loss PDE
+  log_every: 500      # stampa log ogni N iterazioni
+  save_every: 5000    # salva checkpoint ogni N iterazioni
