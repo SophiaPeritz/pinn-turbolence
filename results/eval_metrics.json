@@ -1,0 +1,9 @@
+{
+  "checkpoint": "results/smoke/weights/smoke.pt",
+  "device": "cpu",
+  "t_val": 1.0,
+  "n_grid": 8,
+  "kinetic_energy": 0.052235063165426254,
+  "enstrophy": 0.05391211807727814,
+  "pde_mse": 0.9305165410041809
+}
