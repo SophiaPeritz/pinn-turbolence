@@ -2,7 +2,7 @@
 # Configurazione: Kolmogorov flow 2D - Strato 1 (baseline)
 # ─────────────────────────────────────────────────────
 
-results_dir: "results/baseline"
+results_dir: "results"
 
 physics:
   Re: 1000          # Reynolds number (paper usa 1e6, noi iniziamo basso)
@@ -16,6 +16,10 @@ network:
   n_layers: 4         # numero di hidden layers
   embed_dim: 64       # dimensione Fourier embedding
   fourier_scale: 1.0  # scala della distribuzione N(0, scale^2)
+  # Se true, la rete usera' un mapping periodico per x,y
+  # (cos(2πx), sin(2πx), cos(2πy), sin(2πy)) in modo da
+  # imporre periodicita' spaziale come vincolo hard.
+  periodic_spatial: true
   activation: "tanh"  # tanh | swish | gelu
 
 training:
@@ -27,5 +31,11 @@ training:
   lr_decay_steps: 2000
   w_ic: 100.0         # peso loss IC (alto: priorita alla condizione iniziale)
   w_pde: 1.0          # peso loss PDE
+  w_bc: 1.0           # peso per penalizzazione BC periodiche
   log_every: 500      # stampa log ogni N iterazioni
   save_every: 5000    # salva checkpoint ogni N iterazioni
+
+evaluate:
+  n_grid: 64
+
+# Note: per debug su CPU ridurre `n_iter` e `n_pde`.

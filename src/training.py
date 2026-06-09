@@ -13,6 +13,8 @@ from src.utils   import (save_checkpoint, load_checkpoint,
                           sample_collocation_points, sample_ic_points,
                           kolmogorov_ic, plot_loss_history,
                           plot_velocity_field)
+from torch.utils.tensorboard import SummaryWriter
+import shutil
 
 
 def load_config(path: str) -> dict:
@@ -20,7 +22,7 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def train(cfg: dict):
+def train(cfg: dict, cfg_path: str = None):
     """
     Training loop principale.
 
@@ -70,8 +72,19 @@ def train(cfg: dict):
         device=device
     )
 
+    # ── TensorBoard writer
+    tb_dir = os.path.join(results_dir, "tensorboard")
+    writer = SummaryWriter(tb_dir)
+
+    # Save a copy of config used
+    if cfg_path:
+        try:
+            shutil.copy(cfg_path, os.path.join(results_dir, "config_used.yaml"))
+        except Exception:
+            pass
+
     # ── History per plotting ─────────────────────────────────────────────
-    history = {"total": [], "ic": [], "pde": []}
+    history = {"total": [], "ic": [], "pde": [], "bc": []}
 
     # ── Loop di training ─────────────────────────────────────────────────
     print(f"[train] Inizio training: {n_iter} iterazioni, Re={Re}")
@@ -87,9 +100,11 @@ def train(cfg: dict):
 
         optimizer.zero_grad()
 
-        loss_total, loss_ic, loss_pde = compute_total_loss(
+        loss_total, loss_ic, loss_pde, loss_bc = compute_total_loss(
             model, x_ic, u_ic, x_pde, Re,
-            w_ic=w_ic, w_pde=w_pde
+            w_ic=w_ic, w_pde=w_pde,
+            w_bc=cfg["training"].get("w_bc", 1.0),
+            domain=domain, n_bc=cfg["training"].get("n_bc", 256), device=device
         )
 
         loss_total.backward()
@@ -102,12 +117,21 @@ def train(cfg: dict):
         history["total"].append(loss_total.item())
         history["ic"].append(loss_ic.item())
         history["pde"].append(loss_pde.item())
+        history["bc"].append(loss_bc.item())
+
+        # TensorBoard
+        it_global = it
+        writer.add_scalar("loss/total", loss_total.item(), it_global)
+        writer.add_scalar("loss/ic", loss_ic.item(), it_global)
+        writer.add_scalar("loss/pde", loss_pde.item(), it_global)
+        writer.add_scalar("loss/bc", loss_bc.item(), it_global)
 
         if it % log_every == 0:
             print(f"  it {it:6d} | "
                   f"loss={loss_total.item():.3e} | "
                   f"IC={loss_ic.item():.3e} | "
                   f"PDE={loss_pde.item():.3e} | "
+                  f"BC={loss_bc.item():.3e} | "
                   f"lr={scheduler.get_last_lr()[0]:.2e}")
 
         # Checkpoint
@@ -134,6 +158,8 @@ def train(cfg: dict):
         model, optimizer, n_iter, history["total"][-1],
         os.path.join(results_dir, "weights", "baseline_final.pt")
     )
+
+    writer.close()
 
     return model, history
 

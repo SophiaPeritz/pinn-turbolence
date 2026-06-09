@@ -3,7 +3,17 @@ Navier-Stokes 2D incompressible - Kolmogorov flow
 Equazioni governanti e forzante esterno
 """
 
-import deepxde as dde
+"""
+File opzionale: definizioni PDE per DeepXDE.
+Nota: il training baseline usa PyTorch autograd (`src/losses.py`).
+Questo file fornisce una versione alternativa basata su DeepXDE se si vuole
+esperimentare con quella libreria.
+"""
+
+try:
+    import deepxde as dde
+except Exception:
+    dde = None
 import torch
 
 

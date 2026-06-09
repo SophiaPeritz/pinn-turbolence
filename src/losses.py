@@ -1,11 +1,10 @@
 """
 Loss functions per il PINN baseline (Strato 1).
-Loss composita: IC + BC + PDE, pesi fissi.
-Gli strati successivi aggiungeranno causal weighting e adaptive weights.
+Loss composita: IC + PDE, con BC periodiche gestite come hard constraint
+tramite embedding spaziale in `src/network.py`.
 """
 
 import torch
-import torch.nn as nn
 
 
 def compute_pde_residuals(model, x_pde, Re):
@@ -93,21 +92,28 @@ def compute_pde_loss(model, x_pde, Re):
     return loss
 
 
-def compute_total_loss(model, x_ic, u_ic, x_pde, Re,
-                       w_ic=1.0, w_pde=1.0):
+def compute_total_loss(
+    model,
+    x_ic,
+    u_ic,
+    x_pde,
+    Re,
+    w_ic=1.0,
+    w_pde=1.0,
+    w_bc=0.0,
+    domain=None,
+    n_bc=0,
+    device="cpu",
+):
     """
-    Loss totale composita (Strato 1 - pesi fissi).
+    Loss totale composita.
 
-    Args:
-        w_ic  : peso per la loss IC
-        w_pde : peso per la loss PDE
-
-    Returns:
-        loss_total, loss_ic, loss_pde  (per logging)
+    La periodicità spaziale è imposta come hard constraint nel network.
+    Per compatibilità, la funzione ritorna comunque `loss_bc = 0.0`.
     """
-    loss_ic  = compute_ic_loss(model, x_ic, u_ic)
+    loss_ic = compute_ic_loss(model, x_ic, u_ic)
     loss_pde = compute_pde_loss(model, x_pde, Re)
+    loss_bc = torch.zeros((), device=x_ic.device if torch.is_tensor(x_ic) else device)
 
-    loss_total = w_ic * loss_ic + w_pde * loss_pde
-
-    return loss_total, loss_ic.detach(), loss_pde.detach()
+    loss_total = w_ic * loss_ic + w_pde * loss_pde + w_bc * loss_bc
+    return loss_total, loss_ic.detach(), loss_pde.detach(), loss_bc.detach()

@@ -121,10 +121,18 @@ def enstrophy(u, v, x):
     Enstrofia: E = 0.5 * mean(omega^2)
     omega = dv/dx - du/dy  (vorticita 2D)
     """
+    # Wrapper che usa la funzione completa se viene passato un modello
+    # (utile per API coerenti). Qui implementiamo una semplice versione
+    # che richiede omega esplicito: expects u,v tensors e x per le deriv.
     x = x.requires_grad_(True)
-    # Serve il modello qui, quindi viene chiamata dall'esterno
-    # Questa e' una versione semplificata che riceve omega direttamente
-    raise NotImplementedError("Chiama enstrophy_from_model() con il modello.")
+    du_dy = torch.autograd.grad(u, x,
+                                 grad_outputs=torch.ones_like(u),
+                                 create_graph=False, retain_graph=True)[0][:, 2:3]
+    dv_dx = torch.autograd.grad(v, x,
+                                 grad_outputs=torch.ones_like(v),
+                                 create_graph=False, retain_graph=False)[0][:, 1:2]
+    omega = dv_dx - du_dy
+    return 0.5 * torch.mean(omega ** 2).item()
 
 
 def enstrophy_from_model(model, x_eval, device):
