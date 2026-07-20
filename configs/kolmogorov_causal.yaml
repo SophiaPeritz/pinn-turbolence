@@ -1,0 +1,37 @@
+# Strato 2: stessa baseline, con causal training sulla loss PDE.
+results_dir: "results/causal"
+
+physics:
+  Re: 1000
+  t_end: 1.0
+  domain: [0, 1, 0, 1]
+
+network:
+  input_dim: 3
+  output_dim: 3
+  hidden_dim: 256
+  n_layers: 4
+  embed_dim: 64
+  fourier_scale: 1.0
+  periodic_spatial: true
+  activation: "tanh"
+
+training:
+  n_iter: 20000
+  n_pde: 4096
+  n_ic: 1024
+  lr: 1.0e-3
+  lr_decay: 0.9
+  lr_decay_steps: 2000
+  w_ic: 100.0
+  w_pde: 1.0
+  w_bc: 1.0
+  log_every: 500
+  save_every: 5000
+  causal:
+    enabled: true
+    n_chunks: 16
+    epsilon: 1.0
+
+evaluate:
+  n_grid: 64

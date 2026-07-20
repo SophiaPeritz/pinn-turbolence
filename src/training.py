@@ -62,6 +62,8 @@ def train(cfg: dict, cfg_path: str = None):
     save_every   = cfg["training"].get("save_every", 5000)
     w_ic         = cfg["training"].get("w_ic", 100.0)   # peso IC alto: IC importante
     w_pde        = cfg["training"].get("w_pde", 1.0)
+    causal_cfg   = cfg["training"].get("causal", {})
+    causal       = causal_cfg.get("enabled", False)
     results_dir  = cfg.get("results_dir", "results")
     os.makedirs(results_dir, exist_ok=True)
 
@@ -100,11 +102,15 @@ def train(cfg: dict, cfg_path: str = None):
 
         optimizer.zero_grad()
 
-        loss_total, loss_ic, loss_pde, loss_bc = compute_total_loss(
+        loss_total, loss_ic, loss_pde, loss_bc, loss_details = compute_total_loss(
             model, x_ic, u_ic, x_pde, Re,
             w_ic=w_ic, w_pde=w_pde,
             w_bc=cfg["training"].get("w_bc", 1.0),
-            domain=domain, n_bc=cfg["training"].get("n_bc", 256), device=device
+            domain=domain, n_bc=cfg["training"].get("n_bc", 256), device=device,
+            causal=causal,
+            causal_n_chunks=causal_cfg.get("n_chunks", 16),
+            causal_epsilon=causal_cfg.get("epsilon", 1.0),
+            return_details=True,
         )
 
         loss_total.backward()
@@ -125,14 +131,22 @@ def train(cfg: dict, cfg_path: str = None):
         writer.add_scalar("loss/ic", loss_ic.item(), it_global)
         writer.add_scalar("loss/pde", loss_pde.item(), it_global)
         writer.add_scalar("loss/bc", loss_bc.item(), it_global)
+        if causal:
+            weights = loss_details["causal_weights"]
+            writer.add_scalar("causal/min_weight", weights.min().item(), it_global)
+            writer.add_scalar("causal/mean_weight", weights.mean().item(), it_global)
 
         if it % log_every == 0:
+            causal_log = ""
+            if causal:
+                causal_log = f" | w_min={loss_details['causal_weights'].min().item():.2e}"
             print(f"  it {it:6d} | "
                   f"loss={loss_total.item():.3e} | "
                   f"IC={loss_ic.item():.3e} | "
                   f"PDE={loss_pde.item():.3e} | "
                   f"BC={loss_bc.item():.3e} | "
-                  f"lr={scheduler.get_last_lr()[0]:.2e}")
+                  f"lr={scheduler.get_last_lr()[0]:.2e}"
+                  f"{causal_log}")
 
         # Checkpoint
         if it % save_every == 0:

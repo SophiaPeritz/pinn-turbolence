@@ -1,6 +1,6 @@
 import torch
 from src.network import build_network
-from src.losses import compute_total_loss
+from src.losses import compute_causal_pde_loss, compute_total_loss
 from src.utils import sample_collocation_points, sample_ic_points, kolmogorov_ic
 
 
@@ -24,3 +24,21 @@ def test_loss_and_sampling_shapes():
                                                                w_ic=1.0, w_pde=1.0, w_bc=1.0,
                                                                domain=domain, n_bc=8, device="cpu")
     assert torch.isfinite(loss_total)
+
+
+def test_causal_pde_weights_respect_time_order():
+    cfg_net = {"input_dim": 3, "embed_dim": 8, "hidden_dim": 16,
+               "n_layers": 2, "output_dim": 3}
+    model = build_network(cfg_net)
+    x_pde = sample_collocation_points(16, (0.0, 1.0), (0, 1, 0, 1), device="cpu")
+
+    loss, chunk_losses, weights = compute_causal_pde_loss(
+        model, x_pde, Re=100.0, n_chunks=4, epsilon=1.0
+    )
+
+    assert torch.isfinite(loss)
+    assert chunk_losses.shape == (4,)
+    assert weights.shape == (4,)
+    assert torch.isclose(weights[0], torch.tensor(1.0))
+    assert torch.all(weights[1:] <= weights[:-1])
+    assert not weights.requires_grad
