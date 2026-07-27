@@ -8,13 +8,59 @@ import torch
 import yaml
 import os
 from src.network import build_network
-from src.losses  import compute_total_loss
+from src.losses  import compute_total_loss, compute_ic_loss, compute_pde_loss
 from src.utils   import (save_checkpoint, load_checkpoint,
                           sample_collocation_points, sample_ic_points,
                           kolmogorov_ic, plot_loss_history,
                           plot_velocity_field)
-from torch.utils.tensorboard import SummaryWriter
 import shutil
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ModuleNotFoundError:
+    class SummaryWriter:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def add_scalar(self, *args, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+
+def compute_adaptive_weights(model, x_ic, u_ic, x_pde, Re, device):
+    """
+    Calcola i pesi adattativi basati sulle norme dei gradienti.
+    Eq. 16-17 del paper Wang et al.
+    """
+    loss_ic = compute_ic_loss(model, x_ic, u_ic)
+    loss_pde = compute_pde_loss(model, x_pde, Re)
+
+    params = [p for p in model.parameters() if p.requires_grad]
+    grad_ic = torch.autograd.grad(
+        loss_ic, params,
+        retain_graph=True, allow_unused=True
+    )
+    grad_pde = torch.autograd.grad(
+        loss_pde, params,
+        retain_graph=True, allow_unused=True
+    )
+
+    def grad_norm(grads):
+        terms = [g.pow(2).sum() for g in grads if g is not None]
+        if not terms:
+            return torch.zeros((), device=device)
+        return torch.sqrt(torch.stack(terms).sum())
+
+    norm_ic = grad_norm(grad_ic)
+    norm_pde = grad_norm(grad_pde)
+    total = norm_ic + norm_pde
+
+    w_ic = (total / (norm_ic + 1e-8)).detach()
+    w_pde = (total / (norm_pde + 1e-8)).detach()
+
+    return w_ic.item(), w_pde.item()
 
 
 def load_config(path: str) -> dict:
@@ -62,6 +108,8 @@ def train(cfg: dict, cfg_path: str = None):
     save_every   = cfg["training"].get("save_every", 5000)
     w_ic         = cfg["training"].get("w_ic", 100.0)   # peso IC alto: IC importante
     w_pde        = cfg["training"].get("w_pde", 1.0)
+    use_adaptive = cfg["training"].get("adaptive_weighting", False)
+    adaptive_every = cfg["training"].get("adaptive_every", 1000)
     causal_cfg   = cfg["training"].get("causal", {})
     causal       = causal_cfg.get("enabled", False)
     results_dir  = cfg.get("results_dir", "results")
@@ -100,6 +148,12 @@ def train(cfg: dict, cfg_path: str = None):
             device=device
         )
 
+        # Aggiorna i pesi in base alle norme dei gradienti, se richiesto
+        if use_adaptive and it % adaptive_every == 0:
+            w_ic, w_pde = compute_adaptive_weights(
+                model, x_ic, u_ic, x_pde, Re, device
+            )
+
         optimizer.zero_grad()
 
         loss_total, loss_ic, loss_pde, loss_bc, loss_details = compute_total_loss(
@@ -135,18 +189,25 @@ def train(cfg: dict, cfg_path: str = None):
             weights = loss_details["causal_weights"]
             writer.add_scalar("causal/min_weight", weights.min().item(), it_global)
             writer.add_scalar("causal/mean_weight", weights.mean().item(), it_global)
+        if use_adaptive and it % adaptive_every == 0:
+            writer.add_scalar("adaptive/w_ic", w_ic, it_global)
+            writer.add_scalar("adaptive/w_pde", w_pde, it_global)
 
         if it % log_every == 0:
             causal_log = ""
+            adaptive_log = ""
             if causal:
                 causal_log = f" | w_min={loss_details['causal_weights'].min().item():.2e}"
+            if use_adaptive:
+                adaptive_log = f" | w_ic={w_ic:.2f} | w_pde={w_pde:.2f}"
             print(f"  it {it:6d} | "
                   f"loss={loss_total.item():.3e} | "
                   f"IC={loss_ic.item():.3e} | "
                   f"PDE={loss_pde.item():.3e} | "
                   f"BC={loss_bc.item():.3e} | "
                   f"lr={scheduler.get_last_lr()[0]:.2e}"
-                  f"{causal_log}")
+                  f"{causal_log}"
+                  f"{adaptive_log}")
 
         # Checkpoint
         if it % save_every == 0:

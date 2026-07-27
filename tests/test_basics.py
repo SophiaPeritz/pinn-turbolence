@@ -1,6 +1,7 @@
 import torch
 from src.network import build_network
 from src.losses import compute_causal_pde_loss, compute_total_loss
+from src.training import compute_adaptive_weights
 from src.utils import sample_collocation_points, sample_ic_points, kolmogorov_ic
 
 
@@ -42,3 +43,20 @@ def test_causal_pde_weights_respect_time_order():
     assert torch.isclose(weights[0], torch.tensor(1.0))
     assert torch.all(weights[1:] <= weights[:-1])
     assert not weights.requires_grad
+
+
+def test_adaptive_weights_are_finite_and_positive():
+    cfg_net = {"input_dim": 3, "embed_dim": 8, "hidden_dim": 16,
+               "n_layers": 2, "output_dim": 3}
+    model = build_network(cfg_net)
+
+    domain = (0, 1, 0, 1)
+    x_ic, u_ic = sample_ic_points(8, domain, kolmogorov_ic, device="cpu")
+    x_pde = sample_collocation_points(16, (0.0, 1.0), domain, device="cpu")
+
+    w_ic, w_pde = compute_adaptive_weights(model, x_ic, u_ic, x_pde, Re=100.0, device="cpu")
+
+    assert torch.isfinite(torch.tensor(w_ic))
+    assert torch.isfinite(torch.tensor(w_pde))
+    assert w_ic > 0.0
+    assert w_pde > 0.0
