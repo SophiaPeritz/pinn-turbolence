@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Script CLI per lanciare il training con un file di configurazione YAML."""
 import argparse
-import yaml
 import os
+import sys
+import yaml
 import torch
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
 from src.training import train, train_time_marching
 
 
