@@ -1,7 +1,7 @@
 import torch
 from src.network import build_network
 from src.losses import compute_causal_pde_loss, compute_total_loss
-from src.training import compute_adaptive_weights
+from src.training import compute_adaptive_weights, sample_transfer_ic_points
 from src.utils import sample_collocation_points, sample_ic_points, kolmogorov_ic
 
 
@@ -60,3 +60,18 @@ def test_adaptive_weights_are_finite_and_positive():
     assert torch.isfinite(torch.tensor(w_pde))
     assert w_ic > 0.0
     assert w_pde > 0.0
+
+
+def test_transfer_ic_sampling_uses_window_start_time():
+    cfg_net = {"input_dim": 3, "embed_dim": 8, "hidden_dim": 16,
+               "n_layers": 2, "output_dim": 3}
+    model = build_network(cfg_net)
+
+    domain = (0, 1, 0, 1)
+    t_start = 0.5
+    x_ic, u_ic = sample_transfer_ic_points(model, 8, t_start, domain, device="cpu")
+
+    assert x_ic.shape == (8, 3)
+    assert u_ic.shape == (8, 2)
+    assert torch.allclose(x_ic[:, 0], torch.full((8,), t_start))
+    assert torch.isfinite(u_ic).all()

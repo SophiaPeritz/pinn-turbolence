@@ -4,7 +4,7 @@ import argparse
 import yaml
 import os
 import torch
-from src.training import train
+from src.training import train, train_time_marching
 
 
 def load_config(path):
@@ -25,7 +25,10 @@ def main():
         os.environ["CUDA_VISIBLE_DEVICES"] = args.device
 
     # pass the config path to training so it can be saved with checkpoints
-    train(cfg, cfg_path=args.config)
+    if cfg.get("training", {}).get("time_marching", False):
+        train_time_marching(cfg, cfg_path=args.config)
+    else:
+        train(cfg, cfg_path=args.config)
 
 
 if __name__ == "__main__":

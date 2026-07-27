@@ -7,6 +7,7 @@ Gli strati successivi estenderanno questo file.
 import torch
 import yaml
 import os
+import copy
 from src.network import build_network
 from src.losses  import compute_total_loss, compute_ic_loss, compute_pde_loss
 from src.utils   import (save_checkpoint, load_checkpoint,
@@ -63,33 +64,51 @@ def compute_adaptive_weights(model, x_ic, u_ic, x_pde, Re, device):
     return w_ic.item(), w_pde.item()
 
 
-def load_config(path: str) -> dict:
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+def sample_transfer_ic_points(model, n_ic, t_start, domain, device):
+    """Campiona la IC di una finestra dal modello della finestra precedente."""
+    x = torch.rand(n_ic, 1) * (domain[1] - domain[0]) + domain[0]
+    y = torch.rand(n_ic, 1) * (domain[3] - domain[2]) + domain[2]
+    t = torch.full((n_ic, 1), t_start)
+    x_ic = torch.cat([t, x, y], dim=1).to(device)
+
+    was_training = model.training
+    model.eval()
+    with torch.no_grad():
+        out = model(x_ic)
+    if was_training:
+        model.train()
+
+    u_ic = out[:, 0:2].detach()
+    return x_ic, u_ic
 
 
-def train(cfg: dict, cfg_path: str = None):
-    """
-    Training loop principale.
+def _run_training_loop(
+    cfg: dict,
+    cfg_path: str = None,
+    model=None,
+    device=None,
+    x_ic=None,
+    u_ic=None,
+    t_range=None,
+    results_dir=None,
+    log_prefix="[train]",
+    checkpoint_prefix="baseline",
+    plot_prefix="baseline",
+    copy_config=True,
+):
+    """Esegue il training di una singola finestra temporale o del baseline."""
+    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"{log_prefix} Device: {device}")
 
-    Args:
-        cfg : dizionario di configurazione (da kolmogorov.yaml)
-    """
-
-    # ── Device ──────────────────────────────────────────────────────────
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[train] Device: {device}")
-
-    # ── Rete ────────────────────────────────────────────────────────────
-    model = build_network(cfg["network"]).to(device)
+    if model is None:
+        model = build_network(cfg["network"]).to(device)
+    else:
+        model = model.to(device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"[train] Parametri: {n_params:,}")
+    print(f"{log_prefix} Parametri: {n_params:,}")
 
-    # ── Optimizer ───────────────────────────────────────────────────────
     lr = cfg["training"].get("lr", 1e-3)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-
-    # Learning rate scheduler: decay esponenziale
     scheduler = torch.optim.lr_scheduler.ExponentialLR(
         optimizer,
         gamma=cfg["training"].get("lr_decay", 0.9) ** (
@@ -97,58 +116,57 @@ def train(cfg: dict, cfg_path: str = None):
         )
     )
 
-    # ── Configurazione ──────────────────────────────────────────────────
-    Re           = cfg["physics"]["Re"]
-    t_end        = cfg["physics"]["t_end"]
-    domain       = cfg["physics"]["domain"]      # [x_min, x_max, y_min, y_max]
-    n_pde        = cfg["training"]["n_pde"]
-    n_ic         = cfg["training"]["n_ic"]
-    n_iter       = cfg["training"]["n_iter"]
-    log_every    = cfg["training"].get("log_every", 500)
-    save_every   = cfg["training"].get("save_every", 5000)
-    w_ic         = cfg["training"].get("w_ic", 100.0)   # peso IC alto: IC importante
-    w_pde        = cfg["training"].get("w_pde", 1.0)
+    Re = cfg["physics"]["Re"]
+    t_end = cfg["physics"]["t_end"]
+    domain = cfg["physics"]["domain"]
+    n_pde = cfg["training"]["n_pde"]
+    n_ic = cfg["training"]["n_ic"]
+    n_iter = cfg["training"]["n_iter"]
+    log_every = cfg["training"].get("log_every", 500)
+    save_every = cfg["training"].get("save_every", 5000)
+    w_ic = cfg["training"].get("w_ic", 100.0)
+    w_pde = cfg["training"].get("w_pde", 1.0)
     use_adaptive = cfg["training"].get("adaptive_weighting", False)
     adaptive_every = cfg["training"].get("adaptive_every", 1000)
-    causal_cfg   = cfg["training"].get("causal", {})
-    causal       = causal_cfg.get("enabled", False)
-    results_dir  = cfg.get("results_dir", "results")
+    causal_cfg = cfg["training"].get("causal", {})
+    causal = causal_cfg.get("enabled", False)
+
+    if t_range is None:
+        t_start = 0.0
+        t_stop = t_end
+    else:
+        t_start, t_stop = t_range
+
+    if x_ic is None or u_ic is None:
+        x_ic, u_ic = sample_ic_points(
+            n_ic, domain,
+            u0_fn=kolmogorov_ic,
+            device=device
+        )
+
+    results_dir = results_dir or cfg.get("results_dir", "results")
     os.makedirs(results_dir, exist_ok=True)
 
-    # ── Condizione iniziale (fissa per tutto il training) ───────────────
-    x_ic, u_ic = sample_ic_points(
-        n_ic, domain,
-        u0_fn=kolmogorov_ic,
-        device=device
-    )
-
-    # ── TensorBoard writer
     tb_dir = os.path.join(results_dir, "tensorboard")
     writer = SummaryWriter(tb_dir)
 
-    # Save a copy of config used
-    if cfg_path:
+    if cfg_path and copy_config:
         try:
             shutil.copy(cfg_path, os.path.join(results_dir, "config_used.yaml"))
         except Exception:
             pass
 
-    # ── History per plotting ─────────────────────────────────────────────
     history = {"total": [], "ic": [], "pde": [], "bc": []}
 
-    # ── Loop di training ─────────────────────────────────────────────────
-    print(f"[train] Inizio training: {n_iter} iterazioni, Re={Re}")
+    print(f"{log_prefix} Inizio training: {n_iter} iterazioni, Re={Re}, t=[{t_start:.3f}, {t_stop:.3f}]")
     for it in range(1, n_iter + 1):
-
-        # Ricampiona i punti PDE ad ogni iterazione (Monte Carlo)
         x_pde = sample_collocation_points(
             n_pde,
-            t_range=(0.0, t_end),
+            t_range=(t_start, t_stop),
             domain=domain,
             device=device
         )
 
-        # Aggiorna i pesi in base alle norme dei gradienti, se richiesto
         if use_adaptive and it % adaptive_every == 0:
             w_ic, w_pde = compute_adaptive_weights(
                 model, x_ic, u_ic, x_pde, Re, device
@@ -168,30 +186,26 @@ def train(cfg: dict, cfg_path: str = None):
         )
 
         loss_total.backward()
-        # Gradient clipping: evita esplosione dei gradienti
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         scheduler.step()
 
-        # Logging
         history["total"].append(loss_total.item())
         history["ic"].append(loss_ic.item())
         history["pde"].append(loss_pde.item())
         history["bc"].append(loss_bc.item())
 
-        # TensorBoard
-        it_global = it
-        writer.add_scalar("loss/total", loss_total.item(), it_global)
-        writer.add_scalar("loss/ic", loss_ic.item(), it_global)
-        writer.add_scalar("loss/pde", loss_pde.item(), it_global)
-        writer.add_scalar("loss/bc", loss_bc.item(), it_global)
+        writer.add_scalar("loss/total", loss_total.item(), it)
+        writer.add_scalar("loss/ic", loss_ic.item(), it)
+        writer.add_scalar("loss/pde", loss_pde.item(), it)
+        writer.add_scalar("loss/bc", loss_bc.item(), it)
         if causal:
             weights = loss_details["causal_weights"]
-            writer.add_scalar("causal/min_weight", weights.min().item(), it_global)
-            writer.add_scalar("causal/mean_weight", weights.mean().item(), it_global)
+            writer.add_scalar("causal/min_weight", weights.min().item(), it)
+            writer.add_scalar("causal/mean_weight", weights.mean().item(), it)
         if use_adaptive and it % adaptive_every == 0:
-            writer.add_scalar("adaptive/w_ic", w_ic, it_global)
-            writer.add_scalar("adaptive/w_pde", w_pde, it_global)
+            writer.add_scalar("adaptive/w_ic", w_ic, it)
+            writer.add_scalar("adaptive/w_pde", w_pde, it)
 
         if it % log_every == 0:
             causal_log = ""
@@ -209,34 +223,114 @@ def train(cfg: dict, cfg_path: str = None):
                   f"{causal_log}"
                   f"{adaptive_log}")
 
-        # Checkpoint
         if it % save_every == 0:
             ckpt_path = os.path.join(results_dir, "weights",
-                                      f"baseline_it{it}.pt")
+                                     f"{checkpoint_prefix}_it{it}.pt")
             save_checkpoint(model, optimizer, it,
-                             loss_total.item(), ckpt_path)
+                            loss_total.item(), ckpt_path)
 
-    # ── Salva risultati finali ────────────────────────────────────────────
-    print("[train] Training completato.")
+    print(f"{log_prefix} Training completato.")
 
     plot_loss_history(
         history,
-        save_path=os.path.join(results_dir, "baseline_loss.png")
+        save_path=os.path.join(results_dir, f"{plot_prefix}_loss.png")
     )
     plot_velocity_field(
-        model, t_val=t_end, device=device,
-        save_path=os.path.join(results_dir, "baseline_velocity.png")
+        model, t_val=t_stop, device=device,
+        save_path=os.path.join(results_dir, f"{plot_prefix}_velocity.png")
     )
 
-    # Checkpoint finale
     save_checkpoint(
         model, optimizer, n_iter, history["total"][-1],
-        os.path.join(results_dir, "weights", "baseline_final.pt")
+        os.path.join(results_dir, "weights", f"{checkpoint_prefix}_final.pt")
     )
 
     writer.close()
+    return model, history, optimizer
 
+
+def load_config(path: str) -> dict:
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+
+
+def train(cfg: dict, cfg_path: str = None):
+    """
+    Training loop principale.
+
+    Args:
+        cfg : dizionario di configurazione (da kolmogorov.yaml)
+    """
+
+    model, history, _ = _run_training_loop(
+        cfg,
+        cfg_path=cfg_path,
+        log_prefix="[train]",
+        checkpoint_prefix="baseline",
+        plot_prefix="baseline",
+    )
     return model, history
+
+
+def train_time_marching(cfg: dict, cfg_path: str = None):
+    """Training con time-marching e transfer learning tra finestre temporali."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    t_total = cfg["physics"]["t_end"]
+    window_size = cfg["training"].get("window_size", 0.1)
+    n_windows = int(round(t_total / window_size))
+    if n_windows < 1:
+        raise ValueError("window_size must be positive and smaller than t_end")
+
+    windows = []
+    for i in range(n_windows):
+        t_start = i * window_size
+        t_stop = t_total if i == n_windows - 1 else min(t_total, (i + 1) * window_size)
+        windows.append((t_start, t_stop))
+
+    results_root = cfg.get("results_dir", "results")
+    os.makedirs(results_root, exist_ok=True)
+
+    model = build_network(cfg["network"]).to(device)
+    all_history = []
+    x_ic = None
+    u_ic = None
+
+    for i, (t_start, t_stop) in enumerate(windows):
+        print(f"\n[time-marching] Finestra {i + 1}/{n_windows}: t=[{t_start:.1f}, {t_stop:.1f}]")
+        if i == 0:
+            x_ic, u_ic = sample_ic_points(
+                cfg["training"]["n_ic"],
+                cfg["physics"]["domain"],
+                u0_fn=kolmogorov_ic,
+                device=device,
+            )
+        else:
+            x_ic, u_ic = sample_transfer_ic_points(
+                model,
+                cfg["training"]["n_ic"],
+                t_start,
+                cfg["physics"]["domain"],
+                device=device,
+            )
+
+        window_results_dir = os.path.join(results_root, f"window_{i:02d}")
+        model, history, _ = _run_training_loop(
+            cfg,
+            cfg_path=cfg_path,
+            model=model,
+            device=device,
+            x_ic=x_ic,
+            u_ic=u_ic,
+            t_range=(t_start, t_stop),
+            results_dir=window_results_dir,
+            log_prefix=f"[time-marching] window {i + 1}/{n_windows}",
+            checkpoint_prefix=f"window_{i:02d}",
+            plot_prefix=f"window_{i:02d}",
+            copy_config=(i == 0),
+        )
+        all_history.append(history)
+
+    return model, all_history
 
 
 if __name__ == "__main__":
