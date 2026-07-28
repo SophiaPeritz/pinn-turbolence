@@ -136,9 +136,7 @@ def enstrophy(u, v, x):
 
 
 def enstrophy_from_model(model, x_eval, device):
-    """
-    Calcola enstrofia data la rete e i punti di valutazione.
-    """
+   
     x_eval = x_eval.to(device).requires_grad_(True)
     out = model(x_eval)
 
@@ -161,12 +159,7 @@ def enstrophy_from_model(model, x_eval, device):
 # ─────────────────────────────────────────
 
 def plot_loss_history(history: dict, save_path=None):
-    """
-    Plotta le curve di loss durante il training.
-
-    Args:
-        history : dict con chiavi 'total', 'ic', 'pde' e liste di valori
-    """
+ 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
     axes[0].semilogy(history["total"], label="Total", color="black")
@@ -191,9 +184,7 @@ def plot_loss_history(history: dict, save_path=None):
 
 
 def plot_velocity_field(model, t_val, n_grid=64, device="cpu", save_path=None):
-    """
-    Plotta il campo di velocita u su una griglia 2D a tempo fisso t=t_val.
-    """
+    
     xi = torch.linspace(0, 1, n_grid)
     yi = torch.linspace(0, 1, n_grid)
     Xg, Yg = torch.meshgrid(xi, yi, indexing="ij")

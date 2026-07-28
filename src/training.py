@@ -1,7 +1,8 @@
 """
-Training loop baseline (Strato 1).
-Adam optimizer, pesi fissi, nessun time-marching.
-Gli strati successivi estenderanno questo file.
+Baseline training loops for Kolmogorov PINN experiments.
+
+This module contains the standard training routine plus the time-marching
+variant used for long-horizon simulations.
 """
 
 import torch
@@ -32,8 +33,7 @@ except ModuleNotFoundError:
 
 def compute_adaptive_weights(model, x_ic, u_ic, x_pde, Re, device):
     """
-    Calcola i pesi adattativi basati sulle norme dei gradienti.
-    Eq. 16-17 del paper Wang et al.
+    Compute adaptive IC/PDE weights from gradient norms.
     """
     loss_ic = compute_ic_loss(model, x_ic, u_ic)
     loss_pde = compute_pde_loss(model, x_pde, Re)
@@ -65,7 +65,7 @@ def compute_adaptive_weights(model, x_ic, u_ic, x_pde, Re, device):
 
 
 def sample_transfer_ic_points(model, n_ic, t_start, domain, device):
-    """Campiona la IC di una finestra dal modello della finestra precedente."""
+    """Sample the initial condition of a window from the previous window model."""
     x = torch.rand(n_ic, 1) * (domain[1] - domain[0]) + domain[0]
     y = torch.rand(n_ic, 1) * (domain[3] - domain[2]) + domain[2]
     t = torch.full((n_ic, 1), t_start)
@@ -96,7 +96,7 @@ def _run_training_loop(
     plot_prefix="baseline",
     copy_config=True,
 ):
-    """Esegue il training di una singola finestra temporale o del baseline."""
+    """Run training for a single time window or the baseline full horizon."""
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"{log_prefix} Device: {device}")
 
@@ -105,7 +105,7 @@ def _run_training_loop(
     else:
         model = model.to(device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"{log_prefix} Parametri: {n_params:,}")
+    print(f"{log_prefix} Parameters: {n_params:,}")
 
     lr = cfg["training"].get("lr", 1e-3)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -156,9 +156,9 @@ def _run_training_loop(
         except Exception:
             pass
 
-    history = {"total": [], "ic": [], "pde": [], "bc": []}
+    history = {"total": [], "ic": [], "pde": []}
 
-    print(f"{log_prefix} Inizio training: {n_iter} iterazioni, Re={Re}, t=[{t_start:.3f}, {t_stop:.3f}]")
+    print(f"{log_prefix} Training start: {n_iter} iterations, Re={Re}, t=[{t_start:.3f}, {t_stop:.3f}]")
     for it in range(1, n_iter + 1):
         x_pde = sample_collocation_points(
             n_pde,
@@ -174,14 +174,13 @@ def _run_training_loop(
 
         optimizer.zero_grad()
 
-        loss_total, loss_ic, loss_pde, loss_bc, loss_details = compute_total_loss(
+        loss_total, loss_ic, loss_pde, loss_details = compute_total_loss(
             model, x_ic, u_ic, x_pde, Re,
             w_ic=w_ic, w_pde=w_pde,
-            w_bc=cfg["training"].get("w_bc", 1.0),
-            domain=domain, n_bc=cfg["training"].get("n_bc", 256), device=device,
             causal=causal,
             causal_n_chunks=causal_cfg.get("n_chunks", 16),
             causal_epsilon=causal_cfg.get("epsilon", 1.0),
+            t_range=(t_start, t_stop),
             return_details=True,
         )
 
@@ -193,12 +192,10 @@ def _run_training_loop(
         history["total"].append(loss_total.item())
         history["ic"].append(loss_ic.item())
         history["pde"].append(loss_pde.item())
-        history["bc"].append(loss_bc.item())
 
         writer.add_scalar("loss/total", loss_total.item(), it)
         writer.add_scalar("loss/ic", loss_ic.item(), it)
         writer.add_scalar("loss/pde", loss_pde.item(), it)
-        writer.add_scalar("loss/bc", loss_bc.item(), it)
         if causal:
             weights = loss_details["causal_weights"]
             writer.add_scalar("causal/min_weight", weights.min().item(), it)
@@ -218,7 +215,6 @@ def _run_training_loop(
                   f"loss={loss_total.item():.3e} | "
                   f"IC={loss_ic.item():.3e} | "
                   f"PDE={loss_pde.item():.3e} | "
-                  f"BC={loss_bc.item():.3e} | "
                   f"lr={scheduler.get_last_lr()[0]:.2e}"
                   f"{causal_log}"
                   f"{adaptive_log}")
@@ -229,7 +225,7 @@ def _run_training_loop(
             save_checkpoint(model, optimizer, it,
                             loss_total.item(), ckpt_path)
 
-    print(f"{log_prefix} Training completato.")
+    print(f"{log_prefix} Training completed.")
 
     plot_loss_history(
         history,
@@ -256,10 +252,10 @@ def load_config(path: str) -> dict:
 
 def train(cfg: dict, cfg_path: str = None):
     """
-    Training loop principale.
+    Main single-window training loop.
 
     Args:
-        cfg : dizionario di configurazione (da kolmogorov.yaml)
+        cfg: Training configuration dictionary.
     """
 
     model, history, _ = _run_training_loop(
@@ -273,7 +269,7 @@ def train(cfg: dict, cfg_path: str = None):
 
 
 def train_time_marching(cfg: dict, cfg_path: str = None):
-    """Training con time-marching e transfer learning tra finestre temporali."""
+    """Time-marching training with transfer learning across time windows."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     t_total = cfg["physics"]["t_end"]
     window_size = cfg["training"].get("window_size", 0.1)
@@ -296,7 +292,7 @@ def train_time_marching(cfg: dict, cfg_path: str = None):
     u_ic = None
 
     for i, (t_start, t_stop) in enumerate(windows):
-        print(f"\n[time-marching] Finestra {i + 1}/{n_windows}: t=[{t_start:.1f}, {t_stop:.1f}]")
+        print(f"\n[time-marching] Window {i + 1}/{n_windows}: t=[{t_start:.1f}, {t_stop:.1f}]")
         if i == 0:
             x_ic, u_ic = sample_ic_points(
                 cfg["training"]["n_ic"],

@@ -1,4 +1,5 @@
 import torch
+import pytest
 from src.network import build_network
 from src.losses import compute_causal_pde_loss, compute_total_loss
 from src.training import compute_adaptive_weights, sample_transfer_ic_points
@@ -21,9 +22,15 @@ def test_loss_and_sampling_shapes():
     x_ic, u_ic = sample_ic_points(16, domain, kolmogorov_ic, device="cpu")
     x_pde = sample_collocation_points(32, (0.0,1.0), domain, device="cpu")
 
-    loss_total, loss_ic, loss_pde, loss_bc = compute_total_loss(model, x_ic, u_ic, x_pde, Re=100.0,
-                                                               w_ic=1.0, w_pde=1.0, w_bc=1.0,
-                                                               domain=domain, n_bc=8, device="cpu")
+    loss_total, loss_ic, loss_pde = compute_total_loss(
+        model,
+        x_ic,
+        u_ic,
+        x_pde,
+        Re=100.0,
+        w_ic=1.0,
+        w_pde=1.0,
+    )
     assert torch.isfinite(loss_total)
 
 
@@ -34,7 +41,7 @@ def test_causal_pde_weights_respect_time_order():
     x_pde = sample_collocation_points(16, (0.0, 1.0), (0, 1, 0, 1), device="cpu")
 
     loss, chunk_losses, weights = compute_causal_pde_loss(
-        model, x_pde, Re=100.0, n_chunks=4, epsilon=1.0
+        model, x_pde, Re=100.0, n_chunks=4, epsilon=1.0, t_range=(0.0, 1.0)
     )
 
     assert torch.isfinite(loss)
@@ -43,6 +50,48 @@ def test_causal_pde_weights_respect_time_order():
     assert torch.isclose(weights[0], torch.tensor(1.0))
     assert torch.all(weights[1:] <= weights[:-1])
     assert not weights.requires_grad
+
+
+def test_causal_pde_chunks_follow_fixed_time_bins(monkeypatch):
+    cfg_net = {"input_dim": 3, "embed_dim": 8, "hidden_dim": 16,
+               "n_layers": 2, "output_dim": 3}
+    model = build_network(cfg_net)
+
+    x_pde = torch.tensor(
+        [
+            [0.05, 0.0, 0.0],
+            [0.15, 0.0, 0.0],
+            [0.20, 0.0, 0.0],
+            [0.90, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+
+    def fake_residuals(model, x_pde, Re):
+        t = x_pde[:, 0:1]
+        zeros = torch.zeros_like(t)
+        return t, zeros, zeros
+
+    monkeypatch.setattr("src.losses.compute_pde_residuals", fake_residuals)
+
+    loss, chunk_losses, weights = compute_causal_pde_loss(
+        model,
+        x_pde,
+        Re=100.0,
+        n_chunks=2,
+        epsilon=1.0,
+        t_range=(0.0, 1.0),
+    )
+
+    expected = torch.tensor([
+        (0.05 ** 2 + 0.15 ** 2 + 0.20 ** 2) / 3.0,
+        0.90 ** 2,
+    ])
+
+    assert torch.isfinite(loss)
+    assert torch.allclose(chunk_losses, expected, atol=1e-6)
+    assert weights.shape == (2,)
+    assert torch.isclose(weights[0], torch.tensor(1.0))
 
 
 def test_adaptive_weights_are_finite_and_positive():
