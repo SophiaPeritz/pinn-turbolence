@@ -1,4 +1,4 @@
-# Strato 4: time-marching con transfer learning tra finestre temporali.
+# Strato 4 (cumulative): baseline + causal + adaptive + time-marching.
 results_dir: "results/time_marching"
 
 physics:
@@ -27,6 +27,10 @@ training:
   w_pde: 1.0
   log_every: 500
   save_every: 10000
+  causal:
+    enabled: true
+    n_chunks: 16
+    epsilon: 1.0
   adaptive_weighting: true
   adaptive_every: 1000
   time_marching: true
