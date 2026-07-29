@@ -4,7 +4,7 @@ Physics-informed neural networks for the Kolmogorov flow problem, i.e. the 2D in
 
 ## Repository Overview
 
-- `src/`: core implementation for the network, losses, training loops, utilities, and PDE helpers
+- `src/`: core implementation for the network, losses, training loops, utilities
 - `configs/`: YAML configurations for the different training stages and experiments
 - `scripts/`: command-line entry points for training and evaluation
 - `notebooks/train_colab.ipynb`: step-by-step Colab workflow
@@ -53,15 +53,6 @@ python scripts/train.py --config configs/kolmogorov_timemarching.yaml
 
 Outputs are written to `results/time_marching`, with one folder per window such as `results/time_marching/window_00`.
 
-### 5. Time marching at Re=2000
-
-This is the higher-Reynolds-number version of the time-marching experiment.
-
-```bash
-python scripts/train.py --config configs/kolmogorov_timemarching_re2000.yaml
-```
-
-Outputs are written to `results/time_marching_re2000`.
 
 ### 6. Evaluation
 

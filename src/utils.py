@@ -1,6 +1,6 @@
 """
-Utilities: checkpoint, sampling dei punti di collocazione,
-plotting e metriche fisiche.
+Utilities: checkpointing, collocation point sampling,
+plotting, and physical metrics.
 """
 
 import torch
@@ -35,18 +35,18 @@ def load_checkpoint(model, optimizer, path, device="cpu"):
 
 
 # ─────────────────────────────────────────
-# Sampling dei punti di collocazione
+# Sampling of collocation points
 # ─────────────────────────────────────────
 
 def sample_collocation_points(n_pde, t_range, domain, device):
     """
-    Campiona punti casuali nel dominio spazio-temporale.
+    Samples random points within the spatiotemporal domain.
 
     Args:
-        n_pde    : numero di punti
-        t_range  : (t_min, t_max)
-        domain   : (x_min, x_max, y_min, y_max)  default (0,1,0,1)
-        device   : torch device
+        n_pde   : number of points
+        t_range : (t_min, t_max)
+        domain  : (x_min, x_max, y_min, y_max) default (0, 1, 0, 1)
+        device  : torch device
 
     Returns:
         x_pde : tensor shape (n_pde, 3) -> [t, x, y]
@@ -58,17 +58,17 @@ def sample_collocation_points(n_pde, t_range, domain, device):
 
 
 def sample_ic_points(n_ic, domain, u0_fn, device):
-    """
-    Campiona punti sulla condizione iniziale t=0.
+  """
+    Samples points on the initial condition at t=0.
 
     Args:
-        n_ic   : numero di punti
+        n_ic   : number of points
         domain : (x_min, x_max, y_min, y_max)
-        u0_fn  : funzione u0_fn(x, y) -> (u, v) tensori shape (N,1)
+        u0_fn  : function u0_fn(x, y) -> (u, v) tensors of shape (N, 1)
 
     Returns:
-        x_ic : shape (n_ic, 3)  con t=0
-        u_ic : shape (n_ic, 2)  valori [u, v]
+        x_ic : shape (n_ic, 3) with t=0
+        u_ic : shape (n_ic, 2) [u, v] values
     """
     x = torch.rand(n_ic, 1) * (domain[1] - domain[0]) + domain[0]
     y = torch.rand(n_ic, 1) * (domain[3] - domain[2]) + domain[2]
@@ -83,14 +83,11 @@ def sample_ic_points(n_ic, domain, u0_fn, device):
 
 
 # ─────────────────────────────────────────
-# Condizione iniziale Kolmogorov
+# Kolmogorov IC
 # ─────────────────────────────────────────
 
 def kolmogorov_ic(x, y, seed=42):
-    """
-    Campo di velocita iniziale casuale smussato per Kolmogorov flow.
-    Usa una sovrapposizione di modi di Fourier a bassa frequenza.
-    """
+   
     torch.manual_seed(seed)
     n_modes = 4
     u = torch.zeros_like(x)
@@ -108,7 +105,7 @@ def kolmogorov_ic(x, y, seed=42):
 
 
 # ─────────────────────────────────────────
-# Metriche fisiche
+# Metrics
 # ─────────────────────────────────────────
 
 def kinetic_energy(u, v):
